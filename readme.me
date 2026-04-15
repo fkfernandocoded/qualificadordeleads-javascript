@@ -1,0 +1,40 @@
+Este script tem como 
+finalidade automatizar a identificação de potenciais leads comerciais a partir de uma base de CNPJs. 
+Ele analisa dados públicos das empresas e verifica sua aderência ao nicho de rastreamento e monitoramento veicular.
+
+2. Fonte de Dados
+
+Os CNPJs são obtidos da aba 'Base_Cnpjs' em uma planilha Google Sheets. As informações adicionais são coletadas via API pública (BrasilAPI) e, quando disponível, diretamente do site da empresa.
+
+3. Processamento dos Dados
+
+Para cada CNPJ, o script executa as seguintes 
+etapas: - Validação do CNPJ - Consulta à API para obter dados cadastrais - Análise de CNAE (atividade econômica) - Busca por palavras-chave relacionadas ao nicho 
+- (Opcional) Inspeção do site da empresa para extrair contatos e conteúdo relevante
+
+4. Critérios de Análise
+
+A aderência da empresa é determinada com base 
+em: - CNAEs fortes e médios - Palavras-chave fortes (ex: rastreamento veicular, telemetria) - Palavras-chave médias (ex: frota, automotivo) - Penalização por palavras negativas (ex: restaurante, marketing) - Existência de site e contatos
+
+5. Classificação dos Leads
+
+Após análise, cada empresa é classificada 
+em: - Leads_Aprovados: alta aderência ao nicho - Revisao_Manual: sinais parciais, requer análise humana - Rejeitados: sem aderência suficiente (registrados no log)
+
+6. Extração de Contatos
+
+Quando disponível, o script extrai 
+automaticamente: - E-mails - Telefones - WhatsApp - Nome de contato público
+
+7. Controle de Duplicidade
+
+O script evita duplicação utilizando o CNPJ como chave única. Registros existentes são atualizados (upsert) em vez de duplicados.
+
+8. Otimizações de Performance
+
+Inclui melhorias como: - Processamento em lotes - Controle de cursor (continuação automática) - Limitação de páginas analisadas por site - Redução de chamadas desnecessárias
+
+9. Estrutura de Saída
+
+Os dados processados são organizados em três abas: - Leads_Aprovados - Revisao_Manual - Log_Processamento
