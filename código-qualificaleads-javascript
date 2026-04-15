@@ -1,0 +1,1307 @@
+/************************************************************
+ * RASTREAMENTO LEADS V3.2.1 - MAIS LEVE E MENOS FALSO POSITIVO
+ * Origem: aba Base_Cnpjs
+ * Saídas: Leads_Aprovados, Revisao_Manual, Log_Processamento
+ ************************************************************/
+
+const CONFIG = {
+  SOURCE_SHEET: 'Base_Cnpjs',
+  APPROVED_SHEET: 'Leads_Aprovados',
+  REVIEW_SHEET: 'Revisao_Manual',
+  LOG_SHEET: 'Log_Processamento',
+
+  BATCH_SIZE: 20,
+  MAX_BATCH_CYCLES_PER_RUN: 8,
+  REQUEST_DELAY_MS: 400,
+  SITE_DELAY_MS: 120,
+  MAX_SITE_PAGES: 2,
+
+  BRASILAPI_CNPJ_URL: 'https://brasilapi.com.br/api/cnpj/v1/',
+  SCRIPT_PROP_CURSOR: 'RASTREAMENTO_CURSOR_V321',
+
+  KEYWORDS_STRONG: [
+    'rastreamento veicular',
+    'rastreador veicular',
+    'monitoramento veicular',
+    'telemetria',
+    'telemetria embarcada',
+    'gestao de frotas',
+    'gestão de frotas',
+    'controle de frota',
+    'controle veicular',
+    'gerenciamento de risco',
+    'proteção veicular',
+    'protecao veicular',
+    'bloqueador veicular',
+    'localização veicular',
+    'localizacao veicular',
+    'central de monitoramento',
+    'monitoramento 24h',
+    'gestão de veículos',
+    'gestao de veiculos',
+    'recuperação veicular',
+    'recuperacao veicular',
+    'rastreamento de frota',
+    'rastreio veicular',
+    'rastreamento por gps',
+    'monitoramento de frota',
+    'tecnologia embarcada'
+  ],
+
+  KEYWORDS_MEDIUM: [
+    'rastreamento',
+    'rastreio',
+    'rastreador',
+    'monitoramento',
+    'frota',
+    'frotas',
+    'veiculo',
+    'veículos',
+    'veicular',
+    'automotivo',
+    'moto',
+    'logística',
+    'logistica',
+    'transporte',
+    'transportadora',
+    'bloqueador',
+    'bloqueio',
+    'localizador',
+    'instaladora',
+    'instalação',
+    'instalacao',
+    'instalação automotiva',
+    'instalacao automotiva',
+    'acessórios automotivos',
+    'acessorios automotivos',
+    'alarme',
+    'alarmes',
+    'alarme automotivo',
+    'segurança eletrônica',
+    'seguranca eletronica',
+    'gestão operacional',
+    'gestao operacional',
+    'gestão de ativos',
+    'gestao de ativos',
+    'mobilidade',
+    'oficina automotiva',
+    'elétrica automotiva',
+    'eletrica automotiva',
+    'isca veicular',
+    'bloqueio remoto',
+    'recuperacao de veiculos',
+    'recuperação de veículos',
+    'localizacao em tempo real',
+    'localização em tempo real'
+  ],
+
+  NEGATIVE_KEYWORDS: [
+    'marketing digital',
+    'agencia de publicidade',
+    'salão de beleza',
+    'clinica estetica',
+    'restaurante',
+    'padaria',
+    'advocacia',
+    'contabilidade',
+    'imobiliaria',
+    'construtora',
+    'moda',
+    'ecommerce de roupas'
+  ],
+
+  CNAE_STRONG_PREFIXES: [
+    '8020', // atividades de monitoramento de sistemas de segurança
+    '4321',
+    '4329',
+    '4520',
+    '4530',
+    '4652',
+    '4659',
+    '5229',
+    '6190',
+    '6209',
+    '8011'
+  ],
+
+  CNAE_MEDIUM_PREFIXES: [
+    '4511',
+    '4512',
+    '4513',
+    '4541',
+    '4542',
+    '4742',
+    '4752',
+    '4757',
+    '4930',
+    '7711',
+    '7719',
+    '8299'
+  ],
+
+  CONTACT_PATHS: [
+    '',
+    '/contato',
+    '/empresa',
+    '/fale-conosco'
+  ]
+};
+
+/************************************************************
+ * MENU
+ ************************************************************/
+function onOpen() {
+  SpreadsheetApp.getUi()
+    .createMenu('Rastreamento Leads')
+    .addItem('1. Preparar abas', 'setupSheets')
+    .addItem('2. Processar próximo lote', 'processNextBatch')
+    .addItem('3. Processar vários lotes', 'processAll')
+    .addItem('4. Testar aba origem', 'testSourceSheet')
+    .addItem('5. Limpar saídas', 'resetOutputSheets')
+    .addItem('6. Remover duplicados dos aprovados', 'removerDuplicadosLeadsAprovados')
+    .addItem('7. Remover duplicados da revisão', 'removerDuplicadosRevisaoManual')
+    .addItem('8. Resetar cursor', 'resetProcessingCursor')
+    .addToUi();
+}
+
+/************************************************************
+ * PRINCIPAIS
+ ************************************************************/
+function setupSheets() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  getOrCreateSheet_(ss, CONFIG.APPROVED_SHEET, [
+    'CNPJ_ORIGINAL',
+    'CNPJ_NORMALIZADO',
+    'CNPJ_VALIDO',
+    'RAZAO_SOCIAL',
+    'NOME_FANTASIA',
+    'SITUACAO_CADASTRAL',
+    'CNAE_PRINCIPAL',
+    'CNAES_SECUNDARIOS',
+    'UF',
+    'CIDADE',
+    'SITE',
+    'EMAILS_ENCONTRADOS',
+    'TELEFONES_ENCONTRADOS',
+    'WHATSAPPS_ENCONTRADOS',
+    'CONTATO_PUBLICO_NOME',
+    'CONTATO_PUBLICO_TELEFONE',
+    'MATCH_TIPO',
+    'MATCH_SCORE',
+    'MATCH_RAZAO',
+    'KEYWORDS_ENCONTRADAS',
+    'FONTE_CNPJ',
+    'FONTES_SITE',
+    'FONTE_CONTATO',
+    'PAGINAS_ANALISADAS',
+    'DATA_PROCESSAMENTO'
+  ]);
+
+  getOrCreateSheet_(ss, CONFIG.REVIEW_SHEET, [
+    'CNPJ_ORIGINAL',
+    'CNPJ_NORMALIZADO',
+    'CNPJ_VALIDO',
+    'RAZAO_SOCIAL',
+    'NOME_FANTASIA',
+    'SITUACAO_CADASTRAL',
+    'CNAE_PRINCIPAL',
+    'CNAES_SECUNDARIOS',
+    'UF',
+    'CIDADE',
+    'SITE',
+    'EMAILS_ENCONTRADOS',
+    'TELEFONES_ENCONTRADOS',
+    'WHATSAPPS_ENCONTRADOS',
+    'MATCH_SCORE',
+    'MOTIVO_REVISAO',
+    'KEYWORDS_ENCONTRADAS',
+    'FONTE_CNPJ',
+    'FONTES_SITE',
+    'PAGINAS_ANALISADAS',
+    'DATA_PROCESSAMENTO'
+  ]);
+
+  getOrCreateSheet_(ss, CONFIG.LOG_SHEET, [
+    'DATA',
+    'CNPJ',
+    'STATUS',
+    'DETALHE'
+  ]);
+}
+
+function resetOutputSheets() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  resetSheet_(ss, CONFIG.APPROVED_SHEET, [
+    'CNPJ_ORIGINAL',
+    'CNPJ_NORMALIZADO',
+    'CNPJ_VALIDO',
+    'RAZAO_SOCIAL',
+    'NOME_FANTASIA',
+    'SITUACAO_CADASTRAL',
+    'CNAE_PRINCIPAL',
+    'CNAES_SECUNDARIOS',
+    'UF',
+    'CIDADE',
+    'SITE',
+    'EMAILS_ENCONTRADOS',
+    'TELEFONES_ENCONTRADOS',
+    'WHATSAPPS_ENCONTRADOS',
+    'CONTATO_PUBLICO_NOME',
+    'CONTATO_PUBLICO_TELEFONE',
+    'MATCH_TIPO',
+    'MATCH_SCORE',
+    'MATCH_RAZAO',
+    'KEYWORDS_ENCONTRADAS',
+    'FONTE_CNPJ',
+    'FONTES_SITE',
+    'FONTE_CONTATO',
+    'PAGINAS_ANALISADAS',
+    'DATA_PROCESSAMENTO'
+  ]);
+
+  resetSheet_(ss, CONFIG.REVIEW_SHEET, [
+    'CNPJ_ORIGINAL',
+    'CNPJ_NORMALIZADO',
+    'CNPJ_VALIDO',
+    'RAZAO_SOCIAL',
+    'NOME_FANTASIA',
+    'SITUACAO_CADASTRAL',
+    'CNAE_PRINCIPAL',
+    'CNAES_SECUNDARIOS',
+    'UF',
+    'CIDADE',
+    'SITE',
+    'EMAILS_ENCONTRADOS',
+    'TELEFONES_ENCONTRADOS',
+    'WHATSAPPS_ENCONTRADOS',
+    'MATCH_SCORE',
+    'MOTIVO_REVISAO',
+    'KEYWORDS_ENCONTRADAS',
+    'FONTE_CNPJ',
+    'FONTES_SITE',
+    'PAGINAS_ANALISADAS',
+    'DATA_PROCESSAMENTO'
+  ]);
+
+  resetSheet_(ss, CONFIG.LOG_SHEET, [
+    'DATA',
+    'CNPJ',
+    'STATUS',
+    'DETALHE'
+  ]);
+
+  resetProcessingCursor();
+}
+
+function resetProcessingCursor() {
+  PropertiesService.getScriptProperties().deleteProperty(CONFIG.SCRIPT_PROP_CURSOR);
+}
+
+function testSourceSheet() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(CONFIG.SOURCE_SHEET);
+
+  if (!sheet) {
+    SpreadsheetApp.getUi().alert(`A aba "${CONFIG.SOURCE_SHEET}" não foi encontrada.`);
+    return;
+  }
+
+  const headers = sheet.getRange(1, 1, 1, Math.max(1, sheet.getLastColumn())).getValues()[0];
+  SpreadsheetApp.getUi().alert(`Aba encontrada: ${sheet.getName()}\nCabeçalhos: ${headers.join(' | ')}`);
+}
+
+function processAll() {
+  setupSheets();
+
+  let cycles = 0;
+  let hasMore = true;
+
+  while (hasMore && cycles < CONFIG.MAX_BATCH_CYCLES_PER_RUN) {
+    hasMore = processNextBatch_();
+    cycles++;
+    Utilities.sleep(800);
+  }
+}
+
+function processNextBatch() {
+  setupSheets();
+  processNextBatch_();
+}
+
+function processNextBatch_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sourceSheet = ss.getSheetByName(CONFIG.SOURCE_SHEET);
+  const approvedSheet = ss.getSheetByName(CONFIG.APPROVED_SHEET);
+  const reviewSheet = ss.getSheetByName(CONFIG.REVIEW_SHEET);
+
+  if (!sourceSheet) {
+    throw new Error(`A aba "${CONFIG.SOURCE_SHEET}" não foi encontrada.`);
+  }
+
+  const lastRow = sourceSheet.getLastRow();
+  const lastCol = sourceSheet.getLastColumn();
+  if (lastRow < 2) return false;
+
+  const headers = sourceSheet.getRange(1, 1, 1, lastCol).getValues()[0].map(h => normalizeText_(String(h || '')));
+  const cnpjCol = headers.indexOf('cnpj');
+  if (cnpjCol === -1) {
+    throw new Error('A aba Base_Cnpjs precisa ter uma coluna chamada CNPJ.');
+  }
+
+  const processed = getProcessedCnpjs_([approvedSheet, reviewSheet]);
+  const props = PropertiesService.getScriptProperties();
+  let cursor = Number(props.getProperty(CONFIG.SCRIPT_PROP_CURSOR) || 2);
+  if (cursor < 2) cursor = 2;
+  if (cursor > lastRow) cursor = 2;
+
+  let done = 0;
+  let row = cursor;
+
+  while (row <= lastRow && done < CONFIG.BATCH_SIZE) {
+    const rawCnpj = String(sourceSheet.getRange(row, cnpjCol + 1).getValue() || '').trim();
+    const cnpj = normalizeCnpj_(rawCnpj);
+
+    if (cnpj && !processed[cnpj]) {
+      try {
+        const result = processSingleLead_(rawCnpj, cnpj);
+
+        if (result.destination === 'APPROVED') {
+          appendOrUpdateApprovedRow_(approvedSheet, result);
+          processed[cnpj] = true;
+        } else if (result.destination === 'REVIEW') {
+          appendOrUpdateReviewRow_(reviewSheet, result);
+          processed[cnpj] = true;
+        } else {
+          logRow_(cnpj, 'REJEITADO', result.matchReason || 'Sem aderência');
+          processed[cnpj] = true;
+        }
+      } catch (e) {
+        logRow_(cnpj, 'ERRO', safeErrorMessage_(e));
+      }
+
+      done++;
+      Utilities.sleep(CONFIG.REQUEST_DELAY_MS);
+    }
+
+    row++;
+  }
+
+  props.setProperty(CONFIG.SCRIPT_PROP_CURSOR, String(row));
+
+  return row <= lastRow;
+}
+
+/************************************************************
+ * PROCESSAMENTO DE UM LEAD
+ ************************************************************/
+function processSingleLead_(rawCnpj, cnpj) {
+  const cnpjValido = isValidCnpj_(cnpj);
+
+  if (!cnpjValido) {
+    return {
+      rawCnpj,
+      cnpj,
+      cnpjValido: false,
+      destination: 'REJECT',
+      matchReason: 'CNPJ inválido'
+    };
+  }
+
+  const cnpjData = fetchCnpjBrasilApi_(cnpj);
+
+  const preLead = {
+    razaoSocial: cnpjData.razaoSocial || '',
+    nomeFantasia: cnpjData.nomeFantasia || '',
+    situacaoCadastral: cnpjData.situacaoCadastral || '',
+    cnaePrincipal: cnpjData.cnaePrincipal || '',
+    cnaesSecundarios: cnpjData.cnaesSecundarios || [],
+    uf: cnpjData.uf || '',
+    cidade: cnpjData.cidade || '',
+    site: cnpjData.site || '',
+    emails: cnpjData.email ? [cnpjData.email] : [],
+    phones: cnpjData.telefone ? [cnpjData.telefone] : [],
+    whatsapps: [],
+    contatoNome: '',
+    contatoTelefone: '',
+    fonteContato: '',
+    fonteCnpj: cnpjData.fonteCnpj || '',
+    fontesSite: [],
+    paginasAnalisadas: [],
+    textBlob: [
+      cnpjData.razaoSocial,
+      cnpjData.nomeFantasia,
+      cnpjData.cnaePrincipal,
+      (cnpjData.cnaesSecundarios || []).join(' ')
+    ].join(' ')
+  };
+
+  const preAnalysis = analyzeLeadFit_(preLead);
+
+  const shouldInspectSite =
+    !!preLead.site &&
+    (
+      preAnalysis.score >= 35 ||
+      preAnalysis.strongKeywordCount >= 1 ||
+      preAnalysis.cnaeStrong
+    );
+
+  let websiteData = emptyWebsiteData_();
+
+  if (shouldInspectSite) {
+    const siteCandidate = pickBestSite_(cnpjData);
+    if (siteCandidate) {
+      websiteData = inspectWebsite_(siteCandidate);
+    }
+  }
+
+  const merged = mergeLeadData_(cnpjData, websiteData);
+  const analysis = analyzeLeadFit_(merged);
+
+  if (analysis.decision === 'APPROVED') {
+    return {
+      rawCnpj,
+      cnpj,
+      cnpjValido: true,
+      destination: 'APPROVED',
+      razaoSocial: merged.razaoSocial,
+      nomeFantasia: merged.nomeFantasia,
+      situacaoCadastral: merged.situacaoCadastral,
+      cnaePrincipal: merged.cnaePrincipal,
+      cnaesSecundarios: merged.cnaesSecundarios,
+      uf: merged.uf,
+      cidade: merged.cidade,
+      site: merged.site,
+      emails: merged.emails,
+      phones: merged.phones,
+      whatsapps: merged.whatsapps,
+      contatoNome: merged.contatoNome,
+      contatoTelefone: merged.contatoTelefone,
+      matchType: analysis.matchType,
+      matchScore: analysis.score,
+      matchReason: analysis.reason,
+      keywordsFound: analysis.keywordsFound,
+      fonteCnpj: merged.fonteCnpj,
+      fontesSite: merged.fontesSite,
+      fonteContato: merged.fonteContato,
+      paginasAnalisadas: merged.paginasAnalisadas
+    };
+  }
+
+  if (analysis.decision === 'REVIEW') {
+    return {
+      rawCnpj,
+      cnpj,
+      cnpjValido: true,
+      destination: 'REVIEW',
+      razaoSocial: merged.razaoSocial,
+      nomeFantasia: merged.nomeFantasia,
+      situacaoCadastral: merged.situacaoCadastral,
+      cnaePrincipal: merged.cnaePrincipal,
+      cnaesSecundarios: merged.cnaesSecundarios,
+      uf: merged.uf,
+      cidade: merged.cidade,
+      site: merged.site,
+      emails: merged.emails,
+      phones: merged.phones,
+      whatsapps: merged.whatsapps,
+      matchScore: analysis.score,
+      reviewReason: analysis.reason,
+      keywordsFound: analysis.keywordsFound,
+      fonteCnpj: merged.fonteCnpj,
+      fontesSite: merged.fontesSite,
+      paginasAnalisadas: merged.paginasAnalisadas
+    };
+  }
+
+  return {
+    rawCnpj,
+    cnpj,
+    cnpjValido: true,
+    destination: 'REJECT',
+    matchReason: analysis.reason
+  };
+}
+
+/************************************************************
+ * FONTE CNPJ
+ ************************************************************/
+function fetchCnpjBrasilApi_(cnpj) {
+  const url = CONFIG.BRASILAPI_CNPJ_URL + encodeURIComponent(cnpj);
+
+  const res = UrlFetchApp.fetch(url, {
+    method: 'get',
+    muteHttpExceptions: true,
+    followRedirects: true,
+    headers: {
+      'User-Agent': 'Mozilla/5.0',
+      'Accept': 'application/json'
+    }
+  });
+
+  const code = res.getResponseCode();
+
+  if (code < 200 || code >= 300) {
+    throw new Error(`Falha ao consultar CNPJ. HTTP ${code}`);
+  }
+
+  const json = JSON.parse(res.getContentText());
+
+  return {
+    cnpj: cnpj,
+    razaoSocial: json.razao_social || json.nome || '',
+    nomeFantasia: json.nome_fantasia || json.fantasia || '',
+    situacaoCadastral: json.descricao_situacao_cadastral || json.situacao_cadastral || '',
+    cnaePrincipal: mapMainCnae_(json),
+    cnaesSecundarios: mapSecondaryCnaes_(json),
+    uf: json.uf || '',
+    cidade: json.municipio || json.cidade || '',
+    site: extractSiteFromBrasilApi_(json),
+    email: json.email || '',
+    telefone: pickPhoneFromCnpjJson_(json),
+    fonteCnpj: url
+  };
+}
+
+function extractSiteFromBrasilApi_(json) {
+  if (json.site) return json.site;
+  if (json.website) return json.website;
+  return '';
+}
+
+function mapMainCnae_(json) {
+  if (json.cnae_fiscal_descricao) {
+    return `${json.cnae_fiscal || ''} ${json.cnae_fiscal_descricao || ''}`.trim();
+  }
+
+  if (Array.isArray(json.cnae_principal) && json.cnae_principal.length) {
+    const item = json.cnae_principal[0];
+    if (typeof item === 'string') return item;
+    return `${item.codigo || ''} ${item.descricao || ''}`.trim();
+  }
+
+  if (json.cnae_principal) return String(json.cnae_principal);
+  return '';
+}
+
+function mapSecondaryCnaes_(json) {
+  if (Array.isArray(json.cnaes_secundarios)) {
+    return json.cnaes_secundarios.map(item => {
+      if (typeof item === 'string') return item;
+      return `${item.codigo || ''} ${item.descricao || ''}`.trim();
+    }).filter(Boolean);
+  }
+  return [];
+}
+
+function pickPhoneFromCnpjJson_(json) {
+  const candidates = [
+    json.ddd_telefone_1,
+    json.ddd_telefone_2,
+    json.telefone
+  ].filter(Boolean);
+
+  return uniqueNormalized_(candidates)[0] || '';
+}
+
+/************************************************************
+ * SITE
+ ************************************************************/
+function emptyWebsiteData_() {
+  return {
+    site: '',
+    emails: [],
+    phones: [],
+    whatsapps: [],
+    contatoNome: '',
+    contatoTelefone: '',
+    fonteContato: '',
+    fontesSite: [],
+    paginasAnalisadas: [],
+    bodyText: ''
+  };
+}
+
+function pickBestSite_(cnpjData) {
+  return normalizeUrl_(cnpjData.site || '');
+}
+
+function inspectWebsite_(url) {
+  const baseUrl = normalizeUrl_(url);
+  if (!baseUrl) return emptyWebsiteData_();
+
+  const pages = buildCandidatePages_(baseUrl);
+
+  let allEmails = [];
+  let allPhones = [];
+  let allWhatsapps = [];
+  let allSources = [];
+  let analyzedPages = [];
+  let bodyText = '';
+  let contatoNome = '';
+  let contatoTelefone = '';
+  let fonteContato = '';
+
+  for (let i = 0; i < pages.length && i < CONFIG.MAX_SITE_PAGES; i++) {
+    const pageUrl = pages[i];
+
+    try {
+      const html = fetchHtml_(pageUrl);
+      if (!html) continue;
+      if (!looksLikeHtml_(html)) continue;
+
+      analyzedPages.push(pageUrl);
+      allSources.push(pageUrl);
+
+      allEmails = allEmails.concat(extractEmails_(html));
+      allPhones = allPhones.concat(extractPhones_(html));
+      allWhatsapps = allWhatsapps.concat(extractWhatsApps_(html));
+
+      const publicContact = extractPublicContactFromHtml_(html);
+      if (!contatoNome && publicContact.name) {
+        contatoNome = publicContact.name;
+        contatoTelefone = publicContact.phone || '';
+        fonteContato = pageUrl;
+      }
+
+      bodyText += ' ' + stripHtml_(html).slice(0, 2500);
+
+      Utilities.sleep(CONFIG.SITE_DELAY_MS);
+    } catch (e) {
+      // ignora falhas pontuais do site
+    }
+  }
+
+  return {
+    site: baseUrl,
+    emails: uniqueNormalized_(allEmails),
+    phones: uniquePhones_(allPhones),
+    whatsapps: uniqueNormalized_(allWhatsapps),
+    contatoNome: contatoNome,
+    contatoTelefone: contatoTelefone,
+    fonteContato: fonteContato,
+    fontesSite: uniqueNormalized_(allSources),
+    paginasAnalisadas: uniqueNormalized_(analyzedPages),
+    bodyText: bodyText.trim()
+  };
+}
+
+function buildCandidatePages_(baseUrl) {
+  const root = baseUrl.replace(/\/+$/, '');
+  return CONFIG.CONTACT_PATHS.map(path => root + path);
+}
+
+function fetchHtml_(url) {
+  const res = UrlFetchApp.fetch(url, {
+    method: 'get',
+    muteHttpExceptions: true,
+    followRedirects: true,
+    headers: {
+      'User-Agent': 'Mozilla/5.0'
+    }
+  });
+
+  const code = res.getResponseCode();
+  if (code >= 200 && code < 400) {
+    return res.getContentText();
+  }
+  return '';
+}
+
+function looksLikeHtml_(html) {
+  const h = String(html || '').toLowerCase();
+  return h.indexOf('<html') !== -1 || h.indexOf('<body') !== -1 || h.indexOf('<div') !== -1;
+}
+
+/************************************************************
+ * MERGE
+ ************************************************************/
+function mergeLeadData_(cnpjData, websiteData) {
+  const emails = uniqueNormalized_([].concat(cnpjData.email || [], websiteData.emails || []).filter(Boolean));
+  const phones = uniquePhones_([].concat(cnpjData.telefone || [], websiteData.phones || []).filter(Boolean));
+  const whatsapps = uniqueNormalized_(websiteData.whatsapps || []);
+
+  return {
+    razaoSocial: cnpjData.razaoSocial || '',
+    nomeFantasia: cnpjData.nomeFantasia || '',
+    situacaoCadastral: cnpjData.situacaoCadastral || '',
+    cnaePrincipal: cnpjData.cnaePrincipal || '',
+    cnaesSecundarios: cnpjData.cnaesSecundarios || [],
+    uf: cnpjData.uf || '',
+    cidade: cnpjData.cidade || '',
+    site: websiteData.site || cnpjData.site || '',
+    emails: emails,
+    phones: phones,
+    whatsapps: whatsapps,
+    contatoNome: websiteData.contatoNome || '',
+    contatoTelefone: websiteData.contatoTelefone || '',
+    fonteContato: websiteData.fonteContato || '',
+    fonteCnpj: cnpjData.fonteCnpj || '',
+    fontesSite: websiteData.fontesSite || [],
+    paginasAnalisadas: websiteData.paginasAnalisadas || [],
+    textBlob: [
+      cnpjData.razaoSocial,
+      cnpjData.nomeFantasia,
+      cnpjData.cnaePrincipal,
+      (cnpjData.cnaesSecundarios || []).join(' '),
+      websiteData.bodyText || ''
+    ].join(' ')
+  };
+}
+
+/************************************************************
+ * ANÁLISE DE FIT
+ ************************************************************/
+function analyzeLeadFit_(lead) {
+  const normalizedText = normalizeText_(lead.textBlob);
+  const keywordsStrong = findKeywordsInText_(normalizedText, CONFIG.KEYWORDS_STRONG);
+  const keywordsMedium = findKeywordsInText_(normalizedText, CONFIG.KEYWORDS_MEDIUM);
+  const negativeKeywords = findKeywordsInText_(normalizedText, CONFIG.NEGATIVE_KEYWORDS);
+
+  const cnaeStrong = cnaeMatchesPrefixes_(lead.cnaePrincipal, lead.cnaesSecundarios, CONFIG.CNAE_STRONG_PREFIXES);
+  const cnaeMedium = cnaeMatchesPrefixes_(lead.cnaePrincipal, lead.cnaesSecundarios, CONFIG.CNAE_MEDIUM_PREFIXES);
+
+  let score = 0;
+  let reasons = [];
+  let matchType = 'SEM_MATCH';
+
+  if (cnaeStrong) {
+    score += 50;
+    reasons.push('CNAE forte aderente');
+  }
+
+  if (cnaeMedium) {
+    score += 16;
+    reasons.push('CNAE potencialmente aderente');
+  }
+
+  score += Math.min(keywordsStrong.length * 15, 30);
+  if (keywordsStrong.length) {
+    reasons.push(`Palavras-chave fortes: ${keywordsStrong.length}`);
+  }
+
+  score += Math.min(keywordsMedium.length * 4, 12);
+  if (keywordsMedium.length) {
+    reasons.push(`Palavras-chave médias: ${keywordsMedium.length}`);
+  }
+
+  if (negativeKeywords.length) {
+    score -= Math.min(negativeKeywords.length * 10, 25);
+    reasons.push('Termos negativos encontrados');
+  }
+
+  if (lead.site) score += 3;
+  if ((lead.emails || []).length) score += 3;
+  if ((lead.phones || []).length) score += 3;
+  if ((lead.whatsapps || []).length) score += 4;
+
+  score = Math.max(0, Math.min(score, 100));
+
+  const allKeywords = uniqueNormalized_(keywordsStrong.concat(keywordsMedium));
+
+  if (
+    cnaeStrong ||
+    (keywordsStrong.length >= 2 && score >= 45) ||
+    (cnaeMedium && keywordsStrong.length >= 1 && score >= 40)
+  ) {
+    matchType = cnaeStrong ? 'CNAE_FORTE' : 'KEYWORD_FORTE';
+    return {
+      decision: 'APPROVED',
+      score: score,
+      matchType: matchType,
+      reason: reasons.join(' | ') || 'Lead aderente',
+      keywordsFound: allKeywords,
+      cnaeStrong: cnaeStrong,
+      strongKeywordCount: keywordsStrong.length
+    };
+  }
+
+  if (
+    (cnaeMedium && (keywordsMedium.length >= 1 || keywordsStrong.length >= 1)) ||
+    (keywordsStrong.length >= 1 && score >= 30) ||
+    score >= 32
+  ) {
+    return {
+      decision: 'REVIEW',
+      score: score,
+      matchType: 'REVISAO',
+      reason: reasons.join(' | ') || 'Sinais parciais, revisar manualmente',
+      keywordsFound: allKeywords,
+      cnaeStrong: cnaeStrong,
+      strongKeywordCount: keywordsStrong.length
+    };
+  }
+
+  return {
+    decision: 'REJECT',
+    score: score,
+    matchType: 'SEM_MATCH',
+    reason: reasons.join(' | ') || 'Sem aderência suficiente',
+    keywordsFound: allKeywords,
+    cnaeStrong: cnaeStrong,
+    strongKeywordCount: keywordsStrong.length
+  };
+}
+
+function cnaeMatchesPrefixes_(mainCnae, secondaryCnaes, prefixes) {
+  const text = normalizeText_([mainCnae].concat(secondaryCnaes || []).join(' '))
+    .replace(/\s+/g, '');
+
+  return prefixes.some(prefix => text.indexOf(String(prefix).toLowerCase()) !== -1);
+}
+
+function findKeywordsInText_(normalizedText, keywords) {
+  return keywords.filter(keyword => {
+    const k = normalizeText_(keyword);
+    return k && normalizedText.indexOf(k) !== -1;
+  });
+}
+
+/************************************************************
+ * EXTRAÇÃO
+ ************************************************************/
+function extractEmails_(html) {
+  const matches = html.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi) || [];
+  return uniqueNormalized_(matches.map(v => v.toLowerCase()).filter(isUsefulEmail_));
+}
+
+function extractPhones_(html) {
+  const matches = html.match(/(?:\+?55\s?)?(?:\(?\d{2}\)?\s?)?(?:9?\d{4})[-.\s]?\d{4}/g) || [];
+  return uniquePhones_(matches.map(v => v.trim()));
+}
+
+function extractWhatsApps_(html) {
+  const results = [];
+
+  const waLinks = html.match(/https?:\/\/(?:wa\.me|api\.whatsapp\.com|web\.whatsapp\.com)\/[^\s"'<>]+/gi) || [];
+  results.push.apply(results, waLinks);
+
+  const genericLinks = html.match(/https?:\/\/[^\s"'<>]*whatsapp[^\s"'<>]*/gi) || [];
+  results.push.apply(results, genericLinks);
+
+  const possibleMobiles = html.match(/(?:\+?55\s?)?(?:\(?\d{2}\)?\s?)?(?:9\d{4})[-.\s]?\d{4}/g) || [];
+  possibleMobiles.forEach(v => results.push(v.trim()));
+
+  return uniqueNormalized_(results);
+}
+
+function extractPublicContactFromHtml_(html) {
+  const text = stripHtml_(html);
+
+  const patterns = [
+    /(?:respons[aá]vel|comercial|atendimento|diretor|gerente|s[oó]cio|administrador)\s*[:\-]?\s*([A-ZÀ-Ú][A-Za-zÀ-ú' -]{5,60})/i,
+    /(?:falar com|contato com)\s*[:\-]?\s*([A-ZÀ-Ú][A-Za-zÀ-ú' -]{5,60})/i
+  ];
+
+  let name = '';
+  for (let i = 0; i < patterns.length; i++) {
+    const m = text.match(patterns[i]);
+    if (m && m[1]) {
+      name = m[1].trim();
+      break;
+    }
+  }
+
+  const phones = extractPhones_(html);
+
+  return {
+    name: name,
+    phone: phones[0] || ''
+  };
+}
+
+function isUsefulEmail_(email) {
+  return !/example\.com|dominio\.com|teste@|test@|email@/i.test(email);
+}
+
+function stripHtml_(html) {
+  return String(html || '')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<noscript[\s\S]*?<\/noscript>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/************************************************************
+ * CNPJ
+ ************************************************************/
+function normalizeCnpj_(value) {
+  return String(value || '').replace(/\D/g, '');
+}
+
+function isValidCnpj_(cnpj) {
+  if (!cnpj || cnpj.length !== 14) return false;
+  if (/^(\d)\1+$/.test(cnpj)) return false;
+
+  let length = cnpj.length - 2;
+  let numbers = cnpj.substring(0, length);
+  let digits = cnpj.substring(length);
+  let sum = 0;
+  let pos = length - 7;
+
+  for (let i = 0; i < length; i++) {
+    sum += Number(numbers.charAt(i)) * pos--;
+    if (pos < 2) pos = 9;
+  }
+
+  let result = sum % 11 < 2 ? 0 : 11 - (sum % 11);
+  if (result !== Number(digits.charAt(0))) return false;
+
+  length += 1;
+  numbers = cnpj.substring(0, length);
+  sum = 0;
+  pos = length - 7;
+
+  for (let i = 0; i < length; i++) {
+    sum += Number(numbers.charAt(i)) * pos--;
+    if (pos < 2) pos = 9;
+  }
+
+  result = sum % 11 < 2 ? 0 : 11 - (sum % 11);
+  return result === Number(digits.charAt(1));
+}
+
+/************************************************************
+ * PLANILHA - UPSERT
+ ************************************************************/
+function appendOrUpdateApprovedRow_(sheet, result) {
+  const rowData = buildApprovedRowData_(result);
+  upsertRowByCnpj_(sheet, result.cnpj, rowData, 'APPROVED');
+}
+
+function appendOrUpdateReviewRow_(sheet, result) {
+  const rowData = buildReviewRowData_(result);
+  upsertRowByCnpj_(sheet, result.cnpj, rowData, 'REVIEW');
+}
+
+function buildApprovedRowData_(result) {
+  return [
+    result.rawCnpj,
+    result.cnpj,
+    result.cnpjValido ? 'SIM' : 'NAO',
+    result.razaoSocial || '',
+    result.nomeFantasia || '',
+    result.situacaoCadastral || '',
+    result.cnaePrincipal || '',
+    (result.cnaesSecundarios || []).join(' | '),
+    result.uf || '',
+    result.cidade || '',
+    result.site || '',
+    (result.emails || []).join(' | '),
+    (result.phones || []).join(' | '),
+    (result.whatsapps || []).join(' | '),
+    result.contatoNome || '',
+    result.contatoTelefone || '',
+    result.matchType || '',
+    result.matchScore || 0,
+    result.matchReason || '',
+    (result.keywordsFound || []).join(' | '),
+    result.fonteCnpj || '',
+    (result.fontesSite || []).join(' | '),
+    result.fonteContato || '',
+    (result.paginasAnalisadas || []).join(' | '),
+    new Date()
+  ];
+}
+
+function buildReviewRowData_(result) {
+  return [
+    result.rawCnpj,
+    result.cnpj,
+    result.cnpjValido ? 'SIM' : 'NAO',
+    result.razaoSocial || '',
+    result.nomeFantasia || '',
+    result.situacaoCadastral || '',
+    result.cnaePrincipal || '',
+    (result.cnaesSecundarios || []).join(' | '),
+    result.uf || '',
+    result.cidade || '',
+    result.site || '',
+    (result.emails || []).join(' | '),
+    (result.phones || []).join(' | '),
+    (result.whatsapps || []).join(' | '),
+    result.matchScore || 0,
+    result.reviewReason || '',
+    (result.keywordsFound || []).join(' | '),
+    result.fonteCnpj || '',
+    (result.fontesSite || []).join(' | '),
+    (result.paginasAnalisadas || []).join(' | '),
+    new Date()
+  ];
+}
+
+function upsertRowByCnpj_(sheet, cnpj, rowData, sheetType) {
+  const rowIndex = findRowByCnpj_(sheet, cnpj);
+
+  if (rowIndex) {
+    const existingRow = sheet.getRange(rowIndex, 1, 1, rowData.length).getValues()[0];
+    const mergedRow = mergeRowData_(existingRow, rowData, sheetType);
+    sheet.getRange(rowIndex, 1, 1, mergedRow.length).setValues([mergedRow]);
+  } else {
+    sheet.appendRow(rowData);
+  }
+}
+
+function findRowByCnpj_(sheet, cnpj) {
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return 0;
+
+  const values = sheet.getRange(2, 1, lastRow - 1, 2).getValues();
+  for (let i = 0; i < values.length; i++) {
+    const existingCnpj = normalizeCnpj_(values[i][1] || values[i][0] || '');
+    if (existingCnpj && existingCnpj === cnpj) {
+      return i + 2;
+    }
+  }
+
+  return 0;
+}
+
+function mergeRowData_(existingRow, newRow, sheetType) {
+  const merged = [];
+
+  for (let i = 0; i < newRow.length; i++) {
+    const oldVal = existingRow[i];
+    const newVal = newRow[i];
+
+    if (i === newRow.length - 1) {
+      merged.push(new Date());
+      continue;
+    }
+
+    if (isPipeFieldIndex_(i, sheetType)) {
+      merged.push(mergePipeSeparated_(oldVal, newVal));
+      continue;
+    }
+
+    if (sheetType === 'APPROVED' && i === 17) {
+      merged.push(Math.max(Number(oldVal || 0), Number(newVal || 0)));
+      continue;
+    }
+
+    if (sheetType === 'REVIEW' && i === 14) {
+      merged.push(Math.max(Number(oldVal || 0), Number(newVal || 0)));
+      continue;
+    }
+
+    merged.push(pickBestValue_(oldVal, newVal));
+  }
+
+  return merged;
+}
+
+function isPipeFieldIndex_(index, sheetType) {
+  if (sheetType === 'APPROVED') {
+    return [7, 11, 12, 13, 19, 21, 23].indexOf(index) !== -1;
+  }
+
+  if (sheetType === 'REVIEW') {
+    return [7, 11, 12, 13, 16, 18, 19].indexOf(index) !== -1;
+  }
+
+  return false;
+}
+
+function pickBestValue_(oldVal, newVal) {
+  const oldStr = String(oldVal || '').trim();
+  const newStr = String(newVal || '').trim();
+
+  if (!oldStr && newStr) return newVal;
+  if (oldStr && !newStr) return oldVal;
+
+  if (String(newVal || '').length > String(oldVal || '').length) return newVal;
+  return oldVal;
+}
+
+function mergePipeSeparated_(oldVal, newVal) {
+  const oldArr = String(oldVal || '')
+    .split('|')
+    .map(v => normalizePipeValue_(v))
+    .filter(Boolean);
+
+  const newArr = String(newVal || '')
+    .split('|')
+    .map(v => normalizePipeValue_(v))
+    .filter(Boolean);
+
+  return uniqueNormalized_(oldArr.concat(newArr)).join(' | ');
+}
+
+function normalizePipeValue_(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+function getProcessedCnpjs_(sheets) {
+  const map = {};
+
+  sheets.forEach(sheet => {
+    const lastRow = sheet.getLastRow();
+    if (lastRow < 2) return;
+
+    const values = sheet.getRange(2, 1, lastRow - 1, 2).getValues();
+    for (let i = 0; i < values.length; i++) {
+      const cnpj = normalizeCnpj_(values[i][1] || values[i][0] || '');
+      if (cnpj) map[cnpj] = true;
+    }
+  });
+
+  return map;
+}
+
+function removerDuplicadosLeadsAprovados() {
+  removeDuplicatesFromSheet_(CONFIG.APPROVED_SHEET, 'APPROVED');
+}
+
+function removerDuplicadosRevisaoManual() {
+  removeDuplicatesFromSheet_(CONFIG.REVIEW_SHEET, 'REVIEW');
+}
+
+function removeDuplicatesFromSheet_(sheetName, sheetType) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(sheetName);
+  if (!sheet) return;
+
+  const data = sheet.getDataRange().getValues();
+  if (data.length < 2) return;
+
+  const header = data[0];
+  const byCnpj = {};
+  const order = [];
+
+  for (let i = 1; i < data.length; i++) {
+    const row = data[i];
+    const cnpj = normalizeCnpj_(row[1] || row[0] || '');
+    if (!cnpj) continue;
+
+    if (!byCnpj[cnpj]) {
+      byCnpj[cnpj] = row;
+      order.push(cnpj);
+    } else {
+      byCnpj[cnpj] = mergeRowData_(byCnpj[cnpj], row, sheetType);
+    }
+  }
+
+  const newData = [header].concat(order.map(cnpj => byCnpj[cnpj]));
+
+  sheet.clearContents();
+  sheet.clearFormats();
+  sheet.getRange(1, 1, newData.length, newData[0].length).setValues(newData);
+  sheet.setFrozenRows(1);
+  formatHeader_(sheet, newData[0].length);
+}
+
+function logRow_(cnpj, status, detail) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(CONFIG.LOG_SHEET);
+  sheet.appendRow([new Date(), cnpj, status, String(detail || '').slice(0, 500)]);
+}
+
+function getOrCreateSheet_(ss, name, headers) {
+  let sheet = ss.getSheetByName(name);
+  if (!sheet) {
+    sheet = ss.insertSheet(name);
+  }
+
+  if (sheet.getLastRow() === 0) {
+    sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+    sheet.setFrozenRows(1);
+    formatHeader_(sheet, headers.length);
+  }
+
+  return sheet;
+}
+
+function resetSheet_(ss, name, headers) {
+  let sheet = ss.getSheetByName(name);
+  if (!sheet) {
+    sheet = ss.insertSheet(name);
+  }
+  sheet.clearContents();
+  sheet.clearFormats();
+  sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+  sheet.setFrozenRows(1);
+  formatHeader_(sheet, headers.length);
+}
+
+function formatHeader_(sheet, colCount) {
+  sheet.getRange(1, 1, 1, colCount)
+    .setFontWeight('bold')
+    .setBackground('#d9ead3')
+    .setWrap(true);
+
+  sheet.autoResizeColumns(1, colCount);
+}
+
+/************************************************************
+ * UTILITÁRIOS
+ ************************************************************/
+function normalizeText_(text) {
+  return String(text || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function normalizeUrl_(url) {
+  let u = String(url || '').trim();
+  if (!u) return '';
+
+  if (!/^https?:\/\//i.test(u)) {
+    u = 'https://' + u;
+  }
+
+  return u.replace(/\s/g, '');
+}
+
+function unique_(arr) {
+  const seen = {};
+  return (arr || []).filter(item => {
+    const key = String(item || '').trim();
+    if (!key || seen[key]) return false;
+    seen[key] = true;
+    return true;
+  });
+}
+
+function uniqueNormalized_(arr) {
+  const seen = {};
+  const result = [];
+
+  (arr || []).forEach(item => {
+    const original = String(item || '').replace(/\s+/g, ' ').trim();
+    const key = normalizeText_(original);
+    if (!original || !key || seen[key]) return;
+    seen[key] = true;
+    result.push(original);
+  });
+
+  return result;
+}
+
+function uniquePhones_(arr) {
+  const seen = {};
+  const result = [];
+
+  (arr || []).forEach(item => {
+    const original = String(item || '').trim();
+    const key = original.replace(/\D/g, '');
+    if (!original || !key || key.length < 8 || seen[key]) return;
+    seen[key] = true;
+    result.push(original);
+  });
+
+  return result;
+}
+
+function safeErrorMessage_(e) {
+  try {
+    return String(e && e.message ? e.message : e);
+  } catch (_) {
+    return 'Erro desconhecido';
+  }
+}
